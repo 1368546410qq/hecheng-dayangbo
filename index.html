@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>合成大杨波</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 700px at 50% -10%, #334155, #0f172a);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 640px;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .title {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-shadow: 0 2px 8px rgba(0,0,0,.4);
+  }
+  .stats { display: flex; gap: 10px; }
+  .stat {
+    background: rgba(255,255,255,.1);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 12px;
+    padding: 8px 14px;
+    text-align: center;
+    min-width: 76px;
+  }
+  .stat .label { font-size: 11px; opacity: .7; }
+  .stat .value { font-size: 18px; font-weight: 700; }
+  .body {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    justify-content: center;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .stage {
+    position: relative;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0,0,0,.55);
+    width: 100%;
+    max-width: 480px;
+    background: #000;
+  }
+  canvas#game { display: block; width: 100%; height: auto; touch-action: none; }
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 128px;
+  }
+  .panel {
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    padding: 12px;
+    text-align: center;
+  }
+  .panel .label { font-size: 11px; opacity: .7; margin-bottom: 6px; }
+  canvas#nextCanvas { width: 76px; height: 76px; }
+  button {
+    width: 100%;
+    border: none;
+    border-radius: 12px;
+    padding: 11px 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #f59e0b, #ef4444);
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(239,68,68,.4);
+    transition: transform .08s ease, filter .15s ease;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: scale(.96); }
+  .hint {
+    font-size: 12px;
+    opacity: .7;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    backdrop-filter: blur(2px);
+  }
+  .overlay.hidden { display: none; }
+  .overlay-box { text-align: center; padding: 24px; }
+  .overlay-title { font-size: 30px; font-weight: 800; margin-bottom: 8px; letter-spacing: 2px; }
+  .overlay-score { font-size: 16px; opacity: .9; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">合成大杨波</div>
+      <div class="stats">
+        <div class="stat"><div class="label">得分</div><div class="value" id="score">0</div></div>
+        <div class="stat"><div class="label">最高</div><div class="value" id="best">0</div></div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="stage">
+        <canvas id="game"></canvas>
+        <div class="overlay hidden" id="overlay">
+          <div class="overlay-box">
+            <div class="overlay-title">游戏结束</div>
+            <div class="overlay-score" id="overlayScore"></div>
+            <button id="restart">再来一局</button>
+          </div>
+        </div>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <div class="label">下一个</div>
+          <canvas id="nextCanvas" width="140" height="140"></canvas>
+        </div>
+        <button id="restart2">重新开始</button>
+        <div class="hint">点击 / 触摸投放水果<br>相同水果会合成更大的水果<br>1 → 9 从小到大</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- 基础常量 ----------
+  var W = 480, H = 720;              // 逻辑画布尺寸
+  var DANGER_Y = 140;                // 游戏结束警戒线
+  var G = 2000;                      // 重力加速度 px/s^2
+  var E = 0.22;                      // 弹性系数
+  var STEP = 1 / 120;                // 物理步长
+
+  // 等级 1..9 的半径（从小到大）
+  var RADII = [0, 24, 33, 42, 52, 62, 73, 84, 96, 110];
+  // 等级 1..9 的主题色
+  var COLORS = [null,
+    '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e',
+    '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7'];
+  // 合成得到的分数（第 L 级 = 2^(L-1)）
+  var POINTS = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256];
+
+  // 素材路径（3 是 jpg，其余 png；图片缺失时自动用占位图）
+  var IMG_PATHS = {
+    1: '素材/1.png',
+    2: '素材/2.png',
+    3: '素材/3.jpg',
+    4: '素材/4.png',
+    5: '素材/5.png',
+    6: '素材/6.png',
+    7: '素材/7.png',
+    8: '素材/8.png',
+    9: '素材/9.png'
+  };
+
+  // ---------- DOM ----------
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var nextCanvas = document.getElementById('nextCanvas');
+  var nextCtx = nextCanvas.getContext('2d');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var overlay = document.getElementById('overlay');
+  var overlayScore = document.getElementById('overlayScore');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // ---------- 状态 ----------
+  var fruits = [];      // {level, r, x, y, vx, vy, highTime}
+  var particles = [];   // 合成粒子
+  var texts = [];       // 合成飘分
+  var imgs = {};        // level -> Image (或 null 表示占位图)
+  var score = 0;
+  var best = 0;
+  var nextLevel = 1;
+  var aimX = W / 2;
+  var gameOver = false;
+  var lastDropReal = 0;
+
+  try { best = parseInt(localStorage.getItem('shalong_yangbo_best') || '0', 10) || 0; } catch (e) {}
+  bestEl.textContent = best;
+
+  // ---------- 工具 ----------
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function randomLevel() {
+    var r = Math.random();
+    if (r < 0.30) return 1;
+    if (r < 0.55) return 2;
+    if (r < 0.75) return 3;
+    if (r < 0.90) return 4;
+    return 5;
+  }
+
+  // ---------- 图片加载 ----------
+  for (var lv = 1; lv <= 9; lv++) {
+    (function (level) {
+      var img = new Image();
+      img.onload = function () { imgs[level] = img; };
+      img.onerror = function () { imgs[level] = null; }; // 缺失时使用占位图
+      img.src = IMG_PATHS[level];
+    })(lv);
+  }
+
+  // ---------- 音频（可选，失败静默） ----------
+  var audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      } catch (e) {}
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  function playPop(level) {
+    if (!audioCtx) return;
+    try {
+      var o = audioCtx.createOscillator();
+      var g = audioCtx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 200 + level * 45;
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      var t = audioCtx.currentTime;
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      o.start(t);
+      o.stop(t + 0.16);
+    } catch (e) {}
+  }
+
+  // ---------- 合成特效 ----------
+  function spawnMergeFx(x, y, level) {
+    var col = COLORS[level];
+    for (var k = 0; k < 10; k++) {
+      var ang = Math.random() * Math.PI * 2;
+      var spd = 70 + Math.random() * 180;
+      particles.push({
+        x: x, y: y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd - 40,
+        r: 2 + Math.random() * 4,
+        col: col,
+        t: 0, life: 0.35 + Math.random() * 0.2
+      });
+    }
+    texts.push({ x: x, y: y - 8, text: '+' + POINTS[level], t: 0, life: 0.85 });
+  }
+
+  // ---------- 游戏流程 ----------
+  function drop() {
+    if (gameOver) return;
+    ensureAudio();
+    var now = performance.now();
+    if (now - lastDropReal < 140) return; // 防止连点堆叠
+    lastDropReal = now;
+
+    var level = nextLevel;
+    var r = RADII[level];
+    var x = clamp(aimX, r, W - r);
+    fruits.push({ level: level, r: r, x: x, y: r + 2, vx: 0, vy: 0, highTime: 0 });
+    nextLevel = randomLevel();
+    drawNext();
+  }
+
+  function restart() {
+    fruits = [];
+    particles = [];
+    texts = [];
+    score = 0;
+    gameOver = false;
+    nextLevel = randomLevel();
+    aimX = W / 2;
+    scoreEl.textContent = '0';
+    overlay.classList.add('hidden');
+    drawNext();
+  }
+
+  function gameOverNow() {
+    gameOver = true;
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem('shalong_yangbo_best', String(best)); } catch (e) {}
+    }
+    bestEl.textContent = best;
+    overlayScore.textContent = '本局得分：' + score;
+    overlay.classList.remove('hidden');
+  }
+
+  // ---------- 物理 ----------
+  function integrate(dt) {
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      f.vy += G * dt;
+      f.vx *= Math.max(0, 1 - 0.35 * dt); // 空气阻力
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+
+      // 左右墙
+      if (f.x < f.r) { f.x = f.r; if (f.vx < 0) f.vx = -f.vx * E; }
+      else if (f.x > W - f.r) { f.x = W - f.r; if (f.vx > 0) f.vx = -f.vx * E; }
+      // 地面
+      if (f.y > H - f.r) {
+        f.y = H - f.r;
+        if (f.vy > 0) f.vy = -f.vy * E;
+        f.vx *= Math.max(0, 1 - 3 * dt); // 地面摩擦
+      }
+      // 天花板
+      if (f.y < f.r) { f.y = f.r; if (f.vy < 0) f.vy = -f.vy * E; }
+    }
+  }
+
+  function tryMerge() {
+    for (var i = 0; i < fruits.length; i++) {
+      for (var j = i + 1; j < fruits.length; j++) {
+        var a = fruits[i], b = fruits[j];
+        if (a.level !== b.level || a.level >= 9) continue;
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var min = a.r + b.r;
+        if (dx * dx + dy * dy < min * min) {
+          // 合成
+          var level = a.level + 1;
+          var r = RADII[level];
+          var x = clamp((a.x + b.x) / 2, r, W - r);
+          var y = Math.min((a.y + b.y) / 2, H - r);
+          fruits.splice(Math.max(i, j), 1);
+          fruits.splice(Math.min(i, j), 1);
+          fruits.push({
+            level: level, r: r, x: x, y: y,
+            vx: (a.vx + b.vx) / 2, vy: (a.vy + b.vy) / 2, highTime: 0
+          });
+          score += POINTS[level];
+          scoreEl.textContent = score;
+          spawnMergeFx(x, y, level);
+          playPop(level);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function resolveCollision(a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var min = a.r + b.r;
+    if (dist >= min) return;
+    if (dist < 0.0001) { dx = 0; dy = 0.01; dist = 0.01; }
+    var nx = dx / dist, ny = dy / dist;
+    var overlap = min - dist;
+    var invA = 1 / (a.r * a.r), invB = 1 / (b.r * b.r);
+    var total = invA + invB;
+    // 位置修正
+    a.x -= nx * overlap * (invA / total);
+    a.y -= ny * overlap * (invA / total);
+    b.x += nx * overlap * (invB / total);
+    b.y += ny * overlap * (invB / total);
+    // 冲量
+    var rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+    var vn = rvx * nx + rvy * ny;
+    if (vn < 0) {
+      var j = -(1 + E) * vn / total;
+      a.vx -= j * invA * nx; a.vy -= j * invA * ny;
+      b.vx += j * invB * nx; b.vy += j * invB * ny;
+    }
+  }
+
+  function resolveAll() {
+    for (var i = 0; i < fruits.length; i++) {
+      for (var j = i + 1; j < fruits.length; j++) {
+        resolveCollision(fruits[i], fruits[j]);
+      }
+    }
+  }
+
+  function step(dt) {
+    integrate(dt);
+    for (var it = 0; it < 5; it++) {
+      var guard = 0;
+      while (tryMerge() && guard++ < 40) {}
+      resolveAll();
+    }
+
+    // 警戒线检测：越过警戒线且速度很慢并持续一段时间 → 游戏结束
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      var speed = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
+      if (f.y - f.r < DANGER_Y && speed < 60) {
+        f.highTime += dt;
+        if (f.highTime > 1.1) { gameOverNow(); break; }
+      } else {
+        f.highTime = 0;
+      }
+    }
+  }
+
+  // ---------- 渲染 ----------
+  function drawFruitAt(c, x, y, r, level) {
+    var img = imgs[level];
+    c.save();
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.closePath();
+    c.clip();
+    if (img && img.complete && img.naturalWidth) {
+      var iw = img.naturalWidth, ih = img.naturalHeight;
+      var s = Math.max(iw, ih);
+      var sx = (iw - s) / 2, sy = (ih - s) / 2;
+      c.drawImage(img, sx, sy, s, s, x - r, y - r, r * 2, r * 2);
+    } else {
+      var col = COLORS[level];
+      var grd = c.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
+      grd.addColorStop(0, 'rgba(255,255,255,.75)');
+      grd.addColorStop(1, col);
+      c.fillStyle = grd;
+      c.fillRect(x - r, y - r, r * 2, r * 2);
+      c.fillStyle = '#fff';
+      c.font = 'bold ' + Math.round(r * 0.9) + 'px "Segoe UI", "Microsoft YaHei", sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(String(level), x, y + 1);
+    }
+    c.restore();
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.lineWidth = 3;
+    c.strokeStyle = COLORS[level];
+    c.stroke();
+  }
+
+  function drawNext() {
+    nextCtx.clearRect(0, 0, 140, 140);
+    var r = RADII[nextLevel];
+    var scale = r > 64 ? 64 / r : 1;
+    drawFruitAt(nextCtx, 70, 70, r * scale, nextLevel);
+  }
+
+  function render() {
+    // 背景
+    var bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#f8fafc');
+    bg.addColorStop(1, '#e2e8f0');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // 警戒线上方红色提示
+    var danger = ctx.createLinearGradient(0, 0, 0, DANGER_Y);
+    danger.addColorStop(0, 'rgba(239,68,68,.16)');
+    danger.addColorStop(1, 'rgba(239,68,68,0)');
+    ctx.fillStyle = danger;
+    ctx.fillRect(0, 0, W, DANGER_Y);
+
+    // 容器边框（顶部圆角）
+    ctx.beginPath();
+    ctx.moveTo(14, H - 6);
+    ctx.lineTo(14, 20);
+    ctx.quadraticCurveTo(14, 6, 28, 6);
+    ctx.lineTo(W - 28, 6);
+    ctx.quadraticCurveTo(W - 14, 6, W - 14, 20);
+    ctx.lineTo(W - 14, H - 6);
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(100,116,139,.5)';
+    ctx.stroke();
+
+    // 警戒线
+    ctx.setLineDash([10, 8]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(239,68,68,.7)';
+    ctx.beginPath();
+    ctx.moveTo(10, DANGER_Y);
+    ctx.lineTo(W - 10, DANGER_Y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 水果
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      drawFruitAt(ctx, f.x, f.y, f.r, f.level);
+    }
+
+    // 粒子
+    for (var p = 0; p < particles.length; p++) {
+      var pt = particles[p];
+      ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
+      ctx.fillStyle = pt.col;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // 飘分
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (var t = 0; t < texts.length; t++) {
+      var tx = texts[t];
+      ctx.globalAlpha = Math.max(0, 1 - tx.t / tx.life);
+      ctx.fillStyle = '#f97316';
+      ctx.font = 'bold 22px "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.fillText(tx.text, tx.x, tx.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // 瞄准辅助与预览
+    if (!gameOver) {
+      var r = RADII[nextLevel];
+      var px = clamp(aimX, r, W - r);
+      ctx.setLineDash([4, 6]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(148,163,184,.7)';
+      ctx.beginPath();
+      ctx.moveTo(px, 10);
+      ctx.lineTo(px, H - 10);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      drawFruitAt(ctx, px, r + 2, r, nextLevel);
+    }
+  }
+
+  // ---------- 特效更新 ----------
+  function updateFx(dt) {
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.t += dt;
+      p.vy += 500 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      if (p.t >= p.life) particles.splice(i, 1);
+    }
+    for (var j = texts.length - 1; j >= 0; j--) {
+      var tx = texts[j];
+      tx.t += dt;
+      tx.y -= 30 * dt;
+      if (tx.t >= tx.life) texts.splice(j, 1);
+    }
+  }
+
+  // ---------- 主循环 ----------
+  var last = performance.now();
+  var acc = 0;
+  function loop(now) {
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    acc += dt;
+    while (acc >= STEP) {
+      if (!gameOver) step(STEP);
+      updateFx(STEP);
+      acc -= STEP;
+    }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- 输入 ----------
+  function getCanvasX(clientX) {
+    var rect = canvas.getBoundingClientRect();
+    return (clientX - rect.left) * (W / rect.width);
+  }
+  canvas.addEventListener('pointermove', function (e) {
+    aimX = clamp(getCanvasX(e.clientX), 0, W);
+  });
+  canvas.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    aimX = clamp(getCanvasX(e.clientX), 0, W);
+    drop();
+  });
+
+  document.getElementById('restart').addEventListener('click', restart);
+  document.getElementById('restart2').addEventListener('click', restart);
+
+  // ---------- 启动 ----------
+  nextLevel = randomLevel();
+  drawNext();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
