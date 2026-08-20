@@ -24,7 +24,7 @@
     align-items: center;
     gap: 12px;
     width: 100%;
-    max-width: 720px;
+    max-width: 1100px;
   }
   .header {
     display: flex;
@@ -63,7 +63,7 @@
     overflow: hidden;
     box-shadow: 0 16px 48px rgba(0,0,0,.55);
     width: 100%;
-    max-width: 560px;
+    max-width: 720px;
     background: #000;
   }
   canvas#game { display: block; width: 100%; height: auto; touch-action: none; }
@@ -71,7 +71,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    width: 128px;
+    width: 170px;
   }
   .panel {
     background: rgba(255,255,255,.08);
@@ -81,7 +81,26 @@
     text-align: center;
   }
   .panel .label { font-size: 11px; opacity: .7; margin-bottom: 6px; }
+  .panel canvas { display: block; margin: 0 auto; }
   canvas#nextCanvas { width: 76px; height: 76px; }
+  canvas#galleryCanvas { width: 138px; height: 230px; }
+  .inp {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 8px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.25);
+    background: rgba(255,255,255,.12);
+    color: #fff;
+    font-size: 13px;
+    outline: none;
+  }
+  .inp:focus { border-color: #f59e0b; }
+  .inp::placeholder { color: rgba(255,255,255,.5); }
+  .login-btns { display: flex; gap: 8px; }
+  .login-msg { font-size: 11px; margin-top: 8px; min-height: 14px; opacity: .85; }
+  .who { font-size: 12px; margin-bottom: 8px; word-break: break-all; }
   button {
     width: 100%;
     border: none;
@@ -97,12 +116,20 @@
   }
   button:hover { filter: brightness(1.08); }
   button:active { transform: scale(.96); }
+  button.mini { padding: 7px 0; font-size: 13px; border-radius: 9px; }
   .hint {
     font-size: 12px;
     opacity: .7;
     text-align: center;
     line-height: 1.6;
   }
+  .board { max-height: 260px; overflow-y: auto; text-align: left; font-size: 12px; }
+  .board .row { display: flex; gap: 6px; padding: 3px 4px; border-bottom: 1px solid rgba(255,255,255,.06); border-radius: 6px; }
+  .board .row.me { background: rgba(245,158,11,.18); }
+  .board .rk { width: 18px; color: #f59e0b; font-weight: 700; text-align: right; flex-shrink: 0; }
+  .board .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board .sc { font-weight: 700; flex-shrink: 0; }
+  .board .empty { font-size: 11px; opacity: .6; padding: 6px 2px; }
   .overlay {
     position: absolute;
     inset: 0;
@@ -117,6 +144,7 @@
   .overlay-box { text-align: center; padding: 24px; }
   .overlay-title { font-size: 30px; font-weight: 800; margin-bottom: 8px; letter-spacing: 2px; }
   .overlay-score { font-size: 16px; opacity: .9; margin-bottom: 18px; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -129,6 +157,19 @@
       </div>
     </div>
     <div class="body">
+      <div class="side side-left">
+        <div class="panel">
+          <div class="label">当前用户</div>
+          <div id="userInfo">
+            <div class="who" id="whoAmI"></div>
+            <button class="mini" id="btnLogout">退出登录</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="label">排行榜</div>
+          <div class="board" id="board"></div>
+        </div>
+      </div>
       <div class="stage">
         <canvas id="game"></canvas>
         <div class="overlay hidden" id="overlay">
@@ -139,33 +180,47 @@
           </div>
         </div>
       </div>
-      <div class="side">
+      <div class="side side-right">
         <div class="panel">
           <div class="label">下一个</div>
           <canvas id="nextCanvas" width="140" height="140"></canvas>
         </div>
+        <div class="panel">
+          <div class="label">合成图鉴</div>
+          <canvas id="galleryCanvas"></canvas>
+        </div>
         <button id="restart2">重新开始</button>
-        <div class="hint">点击 / 触摸投放水果<br>相同水果会合成更大的水果<br>1 → 15 从小到大</div>
+        <div class="hint">点击 / 触摸投放杨波<br>相同杨波会合成更大的杨波<br>1 → 15 从小到大</div>
       </div>
     </div>
   </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="store.js"></script>
 <script>
 (function () {
   "use strict";
 
+  // ---------- 云端会话与资料（Supabase，见 store.js） ----------
+  var store = window.shalong_store;
+  var currentUser = null;   // 当前登录用户（Supabase User）
+  var myProfile = null;     // 当前用户资料 {username, best_score, unlocked}
+  // 登录校验在底部 boot() 异步完成：未登录会跳转 login.html
+
   // ---------- 基础常量 ----------
-  var W = 560, H = 820;              // 逻辑画布尺寸（更大的框）
+  var W = 720, H = 720;              // 逻辑画布尺寸（更宽更矮）
   var DANGER_Y = 150;                // 游戏结束警戒线
   var G = 2000;                      // 重力加速度 px/s^2
   var E = 0.12;                      // 弹性系数（更低，减少弹跳）
   var STEP = 1 / 120;                // 物理步长
-  var SOLVER_ITERS = 14;             // 碰撞求解迭代次数
-  var RELAX = 0.5;                   // 位置修正松弛系数
-  var STABLE_SPEED = 40;             // 判定「稳定」的速度阈值 px/s
-  var SLEEP_SPEED = 18;              // 低于此速度开始计时入睡
+  var SOLVER_ITERS = 18;             // 碰撞求解迭代次数
+  var RELAX = 0.6;                   // 位置修正松弛系数
+  var STABLE_SPEED = 70;             // 越线球「低速」阈值 px/s（低于此开始计时）
+  var KEEP_SPEED = 160;              // 超过此速度才清零计时（容忍轻微抖动）
+  var SLEEP_SPEED = 20;              // 低于此速度开始计时入睡
   var SLEEP_TIME = 0.28;             // 持续低速多久后入睡（秒）
-  var DANGER_TIME = 3.0;             // 稳定后越过警戒线 3 秒判负
+  var DANGER_TIME = 3.0;             // 越线球低速持续 3 秒判负
+  var FRESH_TIME = 0.5;              // 新下放球的危险判定保护期（秒）
 
   // 等级 1..15 的半径（从小到大）
   var RADII = [0, 24, 33, 42, 52, 62, 73, 84, 96, 110, 123, 136, 149, 162, 175, 188];
@@ -182,6 +237,48 @@
   var IMG_PATHS = {};
   for (var _lv = 1; _lv <= 15; _lv++) IMG_PATHS[_lv] = '素材/' + _lv + '.png';
 
+  function logout() {
+    store.signOut().then(function () {
+      window.location.replace('login.html');
+    }).catch(function () {
+      window.location.replace('login.html');
+    });
+  }
+  // 记录合成图鉴：本地立即更新，后台同步云端
+  function unlock(level) {
+    if (!myProfile) return;
+    if (!myProfile.unlocked[level]) {
+      myProfile.unlocked[level] = true;
+      renderGallery();
+      store.saveUnlocked(currentUser.id, myProfile.unlocked).catch(function () {});
+    }
+  }
+  // 刷新顶部用户信息 + 图鉴 + 排行榜
+  function refreshUI() {
+    whoEl.textContent = '你好，' + myProfile.username + '（最高 ' + myProfile.best_score + '）';
+    bestEl.textContent = myProfile.best_score;
+    renderGallery();
+    refreshBoard();
+  }
+  function refreshBoard() {
+    store.loadBoard().then(function (rows) {
+      var html = '';
+      if (!rows || !rows.length) {
+        html = '<div class="empty">还没有其他玩家上榜</div>';
+      } else {
+        var top = rows.slice(0, 10);
+        for (var i = 0; i < top.length; i++) {
+          var it = top[i];
+          var cls = (myProfile && it.username === myProfile.username) ? ' me' : '';
+          html += '<div class="row' + cls + '"><span class="rk">' + (i + 1) + '</span><span class="nm">' + store.esc(it.username) + '</span><span class="sc">' + it.best_score + '</span></div>';
+        }
+      }
+      boardEl.innerHTML = html;
+    }).catch(function () {
+      boardEl.innerHTML = '<div class="empty">排行榜加载失败</div>';
+    });
+  }
+
   // ---------- DOM ----------
   var canvas = document.getElementById('game');
   var ctx = canvas.getContext('2d');
@@ -191,28 +288,32 @@
   var bestEl = document.getElementById('best');
   var overlay = document.getElementById('overlay');
   var overlayScore = document.getElementById('overlayScore');
+  var userInfoEl = document.getElementById('userInfo');
+  var whoEl = document.getElementById('whoAmI');
+  var boardEl = document.getElementById('board');
+  var galleryCanvas = document.getElementById('galleryCanvas');
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  galleryCanvas.width = 138 * dpr;
+  galleryCanvas.height = 230 * dpr;
+  var galleryCtx = galleryCanvas.getContext('2d');
+  galleryCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   // ---------- 状态 ----------
-  var fruits = [];      // {level, r, x, y, vx, vy, sleeping, stillTime}
+  var fruits = [];      // {level, r, x, y, vx, vy, sleeping, stillTime, highTime, fresh}
   var particles = [];   // 合成粒子
   var texts = [];       // 合成飘分
   var imgs = {};        // level -> Image (或 null 表示占位图)
   var score = 0;
-  var best = 0;
-  var currentLevel = 1; // 当前即将下放的水果等级
-  var nextLevel = 1;    // 下下个水果等级（侧栏「下一个」显示）
+  var currentLevel = 1; // 当前即将下放的杨波等级
+  var nextLevel = 1;    // 下下个杨波等级（侧栏「下一个」显示）
   var aimX = W / 2;
   var gameOver = false;
   var lastDropReal = 0;
-  var dangerTime = 0;   // 稳定且越过警戒线的累计时长
-
-  try { best = parseInt(localStorage.getItem('shalong_yangbo_best') || '0', 10) || 0; } catch (e) {}
-  bestEl.textContent = best;
+  var dangerLeft = null;   // 危险倒计时剩余秒数（null=无危险）
 
   // ---------- 工具 ----------
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
@@ -294,9 +395,8 @@
     var level = currentLevel;
     var r = RADII[level];
     var x = clamp(aimX, r, W - r);
-    fruits.push({ level: level, r: r, x: x, y: r + 2, vx: 0, vy: 0, sleeping: false, stillTime: 0 });
+    fruits.push({ level: level, r: r, x: x, y: r + 2, vx: 0, vy: 0, sleeping: false, stillTime: 0, highTime: 0, fresh: FRESH_TIME });
     wakeNear(x, r + 2, r * 4);
-    dangerTime = 0; // 新投放重新开始计时
     currentLevel = nextLevel;
     nextLevel = randomLevel();
     drawNext();
@@ -308,7 +408,7 @@
     texts = [];
     score = 0;
     gameOver = false;
-    dangerTime = 0;
+    dangerLeft = null;
     currentLevel = randomLevel();
     nextLevel = randomLevel();
     aimX = W / 2;
@@ -319,11 +419,15 @@
 
   function gameOverNow() {
     gameOver = true;
-    if (score > best) {
-      best = score;
-      try { localStorage.setItem('shalong_yangbo_best', String(best)); } catch (e) {}
+    if (myProfile && score > myProfile.best_score) {
+      myProfile.best_score = score;
+      bestEl.textContent = score;
+      whoEl.textContent = '你好，' + myProfile.username + '（最高 ' + score + '）';
+      store.updateBest(currentUser.id, score).catch(function () {});
+      refreshBoard();
+    } else if (myProfile) {
+      bestEl.textContent = myProfile.best_score;
     }
-    bestEl.textContent = best;
     overlayScore.textContent = '本局得分：' + score;
     overlay.classList.remove('hidden');
   }
@@ -369,13 +473,18 @@
           fruits.splice(Math.min(i, j), 1);
           fruits.push({
             level: level, r: r, x: x, y: y,
-            vx: (a.vx + b.vx) / 2, vy: (a.vy + b.vy) / 2, sleeping: false, stillTime: 0
+            vx: (a.vx + b.vx) / 2, vy: (a.vy + b.vy) / 2,
+            sleeping: false, stillTime: 0,
+            // 合成出的球继承原球的危险计时与保护期，避免堆顶连续合成导致永不判负
+            highTime: Math.max(a.highTime, b.highTime),
+            fresh: Math.max(a.fresh, b.fresh)
           });
           wakeNear(x, y, r * 4);
           score += POINTS[level];
           scoreEl.textContent = score;
           spawnMergeFx(x, y, level);
           playPop(level);
+          unlock(level); // 记录到当前用户的合成图鉴
           return true;
         }
       }
@@ -388,8 +497,19 @@
     var dist = Math.sqrt(dx * dx + dy * dy);
     var min = a.r + b.r;
     if (dist >= min) return;
-    // 双方都在睡且已接触：忽略，避免无谓抖动
-    if (a.sleeping && b.sleeping) return;
+    // 双方都在睡且已接触：做完全的位置分离（无速度所以不会过冲），
+    // 不唤醒也不施加冲量——避免「穿模卡在一起」且不引发抖动
+    if (a.sleeping && b.sleeping) {
+      var ov = min - dist;
+      if (dist < 0.0001) { dx = 0; dy = 0.01; dist = 0.01; }
+      var nx2 = dx / dist, ny2 = dy / dist;
+      var ia = 1 / (a.r * a.r), ib = 1 / (b.r * b.r), tot = ia + ib;
+      a.x -= nx2 * ov * (ia / tot);
+      a.y -= ny2 * ov * (ia / tot);
+      b.x += nx2 * ov * (ib / tot);
+      b.y += ny2 * ov * (ib / tot);
+      return;
+    }
     // 发生碰撞即唤醒双方
     a.sleeping = false; a.stillTime = 0;
     b.sleeping = false; b.stillTime = 0;
@@ -459,21 +579,26 @@
   }
 
   function updateDanger(dt) {
-    if (fruits.length === 0) { dangerTime = 0; return; }
-    var overflow = false;
-    var stable = true;
+    dangerLeft = null;
+    var maxT = 0;
     for (var i = 0; i < fruits.length; i++) {
       var f = fruits[i];
+      if (f.fresh > 0) { f.fresh -= dt; continue; } // 刚下放的球有保护期，不参与危险判定
       var sp = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
-      if (sp >= STABLE_SPEED) stable = false;
-      if (f.y - f.r < DANGER_Y) overflow = true;
+      if (f.y - f.r < DANGER_Y) {
+        if (sp < STABLE_SPEED) {
+          f.highTime += dt;
+          if (f.highTime > maxT) maxT = f.highTime;
+        } else if (sp >= KEEP_SPEED) {
+          f.highTime = 0; // 真正剧烈运动才清零
+        }
+        // 其余情况（轻微抖动）计时保持不清零
+      } else {
+        f.highTime = 0;
+      }
     }
-    if (stable && overflow) {
-      dangerTime += dt;
-      if (dangerTime >= DANGER_TIME) gameOverNow();
-    } else {
-      dangerTime = 0;
-    }
+    if (maxT >= DANGER_TIME) { gameOverNow(); return; }
+    if (maxT > 0) dangerLeft = Math.max(0, DANGER_TIME - maxT);
   }
 
   function step(dt) {
@@ -527,6 +652,44 @@
     drawFruitAt(nextCtx, 70, 70, r * scale, nextLevel);
   }
 
+  // 合成图鉴：合成过的显示图像，未合成显示问号
+  function renderGallery() {
+    galleryCtx.clearRect(0, 0, 138, 230);
+    var cell = 40, gap = 6, x0 = 6, y0 = 6;
+    for (var lv = 1; lv <= 15; lv++) {
+      var col = (lv - 1) % 3, row = Math.floor((lv - 1) / 3);
+      var cx = x0 + col * (cell + gap) + cell / 2;
+      var cy = y0 + row * (cell + gap) + cell / 2;
+      var unlockedFlag = myProfile && myProfile.unlocked && myProfile.unlocked[lv];
+      if (unlockedFlag) {
+        drawFruitAt(galleryCtx, cx, cy, 18, lv);
+      } else {
+        galleryCtx.beginPath();
+        galleryCtx.arc(cx, cy, 18, 0, Math.PI * 2);
+        galleryCtx.fillStyle = 'rgba(148,163,184,.18)';
+        galleryCtx.fill();
+        galleryCtx.strokeStyle = 'rgba(148,163,184,.55)';
+        galleryCtx.lineWidth = 1.5;
+        galleryCtx.stroke();
+        galleryCtx.fillStyle = 'rgba(148,163,184,.9)';
+        galleryCtx.font = 'bold 20px "Segoe UI", "Microsoft YaHei", sans-serif';
+        galleryCtx.textAlign = 'center';
+        galleryCtx.textBaseline = 'middle';
+        galleryCtx.fillText('?', cx, cy + 1);
+      }
+      // 等级角标（右下）
+      galleryCtx.fillStyle = 'rgba(15,23,42,.55)';
+      galleryCtx.beginPath();
+      galleryCtx.arc(cx + 15, cy + 15, 8, 0, Math.PI * 2);
+      galleryCtx.fill();
+      galleryCtx.fillStyle = '#fff';
+      galleryCtx.font = 'bold 9px "Segoe UI", "Microsoft YaHei", sans-serif';
+      galleryCtx.textAlign = 'center';
+      galleryCtx.textBaseline = 'middle';
+      galleryCtx.fillText(String(lv), cx + 15, cy + 15);
+    }
+  }
+
   function render() {
     // 背景
     var bg = ctx.createLinearGradient(0, 0, 0, H);
@@ -564,7 +727,7 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 水果
+    // 杨波
     for (var i = 0; i < fruits.length; i++) {
       var f = fruits[i];
       drawFruitAt(ctx, f.x, f.y, f.r, f.level);
@@ -606,6 +769,31 @@
       ctx.stroke();
       ctx.setLineDash([]);
       drawFruitAt(ctx, px, r + 2, r, currentLevel);
+    }
+
+    // 危险倒计时提示（最上层）
+    if (dangerLeft !== null && !gameOver) {
+      var msg = '危险！' + dangerLeft.toFixed(1) + ' 秒后游戏结束';
+      ctx.font = 'bold 22px "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var tw = ctx.measureText(msg).width;
+      var boxW = tw + 30, boxH = 40, boxX = W / 2 - boxW / 2, boxY = 12;
+      ctx.fillStyle = 'rgba(220,38,38,.93)';
+      ctx.beginPath();
+      ctx.moveTo(boxX + 12, boxY);
+      ctx.lineTo(boxX + boxW - 12, boxY);
+      ctx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + 12);
+      ctx.lineTo(boxX + boxW, boxY + boxH - 12);
+      ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - 12, boxY + boxH);
+      ctx.lineTo(boxX + 12, boxY + boxH);
+      ctx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - 12);
+      ctx.lineTo(boxX, boxY + 12);
+      ctx.quadraticCurveTo(boxX, boxY, boxX + 12, boxY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(msg, W / 2, boxY + boxH / 2);
     }
   }
 
@@ -660,12 +848,28 @@
 
   document.getElementById('restart').addEventListener('click', restart);
   document.getElementById('restart2').addEventListener('click', restart);
+  document.getElementById('btnLogout').addEventListener('click', logout);
 
-  // ---------- 启动 ----------
-  currentLevel = randomLevel();
-  nextLevel = randomLevel();
+  // ---------- 启动（异步：先验证登录，再加载资料，最后开始游戏） ----------
   drawNext();
-  requestAnimationFrame(loop);
+  store.getSession().then(function (user) {
+    if (!user) { window.location.replace('login.html'); return null; }
+    currentUser = user;
+    return store.loadProfile(user.id).then(function (p) {
+      if (p) return p;
+      return store.ensureProfile(user); // 老用户补建资料
+    });
+  }).then(function (profile) {
+    if (!profile) return; // 已跳转登录页
+    myProfile = profile;
+    currentLevel = randomLevel();
+    nextLevel = randomLevel();
+    refreshUI();
+    requestAnimationFrame(loop);
+  }).catch(function () {
+    // 存储未配置或网络异常：回到登录页
+    window.location.replace('login.html');
+  });
 })();
 </script>
 </body>

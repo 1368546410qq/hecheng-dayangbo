@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>登录 - 合成大杨波</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(1200px 700px at 50% -10%, #334155, #0f172a);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .login-card {
+    width: 100%;
+    max-width: 340px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 20px;
+    padding: 32px 28px;
+    text-align: center;
+    box-shadow: 0 16px 48px rgba(0,0,0,.45);
+    backdrop-filter: blur(4px);
+  }
+  .logo {
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    margin: 0 auto 14px;
+    background: radial-gradient(circle at 30% 25%, #fbbf24, #ef4444);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    box-shadow: 0 8px 24px rgba(239,68,68,.5);
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+  }
+  .sub {
+    font-size: 13px;
+    opacity: .65;
+    margin-bottom: 24px;
+  }
+  .inp {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 11px 12px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.25);
+    background: rgba(255,255,255,.1);
+    color: #fff;
+    font-size: 15px;
+    outline: none;
+  }
+  .inp:focus { border-color: #f59e0b; }
+  .inp::placeholder { color: rgba(255,255,255,.5); }
+  .btns { display: flex; gap: 10px; margin-top: 6px; }
+  button {
+    flex: 1;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    cursor: pointer;
+    transition: transform .08s ease, filter .15s ease;
+  }
+  #btnLogin {
+    background: linear-gradient(135deg, #f59e0b, #ef4444);
+    box-shadow: 0 6px 18px rgba(239,68,68,.4);
+  }
+  #btnReg {
+    background: linear-gradient(135deg, #0ea5e9, #6366f1);
+    box-shadow: 0 6px 18px rgba(99,102,241,.4);
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: scale(.96); }
+  .msg {
+    min-height: 18px;
+    margin-top: 14px;
+    font-size: 13px;
+    opacity: .9;
+  }
+  .msg.err { color: #fca5a5; }
+  .msg.ok { color: #86efac; }
+  .tip {
+    margin-top: 16px;
+    font-size: 11px;
+    opacity: .5;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="logo">🍉</div>
+    <h1>合成大杨波</h1>
+    <div class="sub">登录后开始游戏，图鉴与排行榜云端同步</div>
+    <input id="email" class="inp" type="email" placeholder="邮箱" maxlength="64" autocomplete="email">
+    <input id="user" class="inp" type="text" placeholder="昵称（注册用，排行榜显示）" maxlength="12" autocomplete="off">
+    <input id="pass" class="inp" type="password" placeholder="密码（至少 6 位）" maxlength="72">
+    <div class="btns">
+      <button id="btnLogin">登 录</button>
+      <button id="btnReg">注 册</button>
+    </div>
+    <div class="msg" id="msg"></div>
+    <div class="tip">数据通过 Supabase 云端存储，换设备也能同步</div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="store.js"></script>
+<script>
+(function () {
+  'use strict';
+  var store = window.shalong_store;
+  var emailEl = document.getElementById('email');
+  var userEl = document.getElementById('user');
+  var passEl = document.getElementById('pass');
+  var msgEl = document.getElementById('msg');
+
+  function say(text, isErr) {
+    msgEl.textContent = text;
+    msgEl.className = 'msg ' + (isErr ? 'err' : 'ok');
+  }
+
+  function enterGame(user) {
+    store.ensureProfile(user).then(function () {
+      window.location.replace('index.html');
+    }).catch(function (err) {
+      say('进入游戏失败：' + ((err && err.message) || err), true);
+    });
+  }
+
+  function register() {
+    var email = emailEl.value.trim(), u = userEl.value.trim(), p = passEl.value;
+    if (!email || email.indexOf('@') < 0) { say('请输入正确的邮箱', true); return; }
+    if (!u) { say('请输入昵称', true); return; }
+    if (p.length < 6) { say('密码至少 6 位', true); return; }
+    store.signUp(email, p, u).then(function (res) {
+      if (res.error) throw res.error;
+      if (res.data.session && res.data.session.user) {
+        say('注册成功，正在进入游戏…');
+        enterGame(res.data.session.user);
+      } else {
+        // 邮箱确认仍开启时，需要先验证邮件；验证后再次登录即可
+        say('注册成功！请到邮箱点验证链接后回来登录', false);
+      }
+    }).catch(function (err) {
+      var m = (err && err.message) || String(err);
+      if (/User already registered/i.test(m)) m = '该邮箱已注册，请直接登录';
+      say('注册失败：' + m, true);
+    });
+  }
+
+  function login() {
+    var email = emailEl.value.trim(), p = passEl.value;
+    if (!email || !p) { say('请输入邮箱和密码', true); return; }
+    store.signIn(email, p).then(function (res) {
+      if (res.error) throw res.error;
+      say('登录成功，正在进入游戏…');
+      enterGame(res.data.user);
+    }).catch(function (err) {
+      var m = (err && err.message) || String(err);
+      if (/Invalid login credentials/i.test(m)) m = '邮箱或密码错误';
+      say('登录失败：' + m, true);
+    });
+  }
+
+  document.getElementById('btnLogin').addEventListener('click', login);
+  document.getElementById('btnReg').addEventListener('click', register);
+  function onKey(e) { if (e.key === 'Enter') login(); }
+  emailEl.addEventListener('keydown', onKey);
+  passEl.addEventListener('keydown', onKey);
+
+  // 已登录直接进游戏
+  store.getSession().then(function (user) {
+    if (user) enterGame(user);
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>
