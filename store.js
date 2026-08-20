@@ -60,27 +60,34 @@
     var c = client();
     var name = (user.user_metadata && user.user_metadata.username) ||
                (user.email || 'player').split('@')[0];
-    var rec = { id: user.id, username: name, best_score: 0, unlocked: {} };
-    return c.from('profiles').upsert(rec, { onConflict: 'id' }).select().single()
-      .then(function (res) { return res.data || rec; });
+    var rec = { id: user.id, username: name, best_score: 0, unlocked: { '1': true } };
+    if (!c) return Promise.resolve(rec);
+    return Promise.resolve(c.from('profiles').upsert(rec, { onConflict: 'id' }).select().single())
+      .then(function (res) { return (res && res.data) || rec; });
   }
   function loadProfile(userId) {
     var c = client();
-    return c.from('profiles').select('id, username, best_score, unlocked').eq('id', userId).maybeSingle()
-      .then(function (res) { return res.data || null; });
+    if (!c) return Promise.resolve(null);
+    return Promise.resolve(c.from('profiles').select('id, username, best_score, unlocked').eq('id', userId).maybeSingle())
+      .then(function (res) { return (res && res.data) || null; });
   }
+  // 注意：update/save 返回的查询构建器只是 thenable（没有 .catch），
+  // 必须用 Promise.resolve 包成标准 Promise，否则调用端 .catch 会报错
   function updateBest(userId, score) {
     var c = client();
-    return c.from('profiles').update({ best_score: score }).eq('id', userId);
+    if (!c) return Promise.resolve();
+    return Promise.resolve(c.from('profiles').update({ best_score: score }).eq('id', userId));
   }
   function saveUnlocked(userId, unlocked) {
     var c = client();
-    return c.from('profiles').update({ unlocked: unlocked }).eq('id', userId);
+    if (!c) return Promise.resolve();
+    return Promise.resolve(c.from('profiles').update({ unlocked: unlocked }).eq('id', userId));
   }
   function loadBoard() {
     var c = client();
-    return c.from('profiles').select('username, best_score').order('best_score', { ascending: false }).limit(50)
-      .then(function (res) { return res.data || []; });
+    if (!c) return Promise.resolve([]);
+    return Promise.resolve(c.from('profiles').select('username, best_score').order('best_score', { ascending: false }).limit(50))
+      .then(function (res) { return (res && res.data) || []; });
   }
 
   // ---------- 工具 ----------

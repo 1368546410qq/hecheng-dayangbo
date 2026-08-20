@@ -215,11 +215,9 @@
   var STEP = 1 / 120;                // 物理步长
   var SOLVER_ITERS = 18;             // 碰撞求解迭代次数
   var RELAX = 0.6;                   // 位置修正松弛系数
-  var STABLE_SPEED = 70;             // 越线球「低速」阈值 px/s（低于此开始计时）
-  var KEEP_SPEED = 160;              // 超过此速度才清零计时（容忍轻微抖动）
+  var DANGER_TIME = 10.0;            // 越线持续 10 秒判负
   var SLEEP_SPEED = 20;              // 低于此速度开始计时入睡
   var SLEEP_TIME = 0.28;             // 持续低速多久后入睡（秒）
-  var DANGER_TIME = 3.0;             // 越线球低速持续 3 秒判负
   var FRESH_TIME = 0.5;              // 新下放球的危险判定保护期（秒）
 
   // 等级 1..15 的半径（从小到大）
@@ -579,26 +577,21 @@
   }
 
   function updateDanger(dt) {
-    dangerLeft = null;
-    var maxT = 0;
+    // 全局倒计时：只要有任何图形（部分）越过警戒线就开始倒数 10 秒，
+    // 中途全部回到线以下则清零；连续 10 秒未回去即判负。不要求图形稳定。
+    var overflow = false;
     for (var i = 0; i < fruits.length; i++) {
       var f = fruits[i];
-      if (f.fresh > 0) { f.fresh -= dt; continue; } // 刚下放的球有保护期，不参与危险判定
-      var sp = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
-      if (f.y - f.r < DANGER_Y) {
-        if (sp < STABLE_SPEED) {
-          f.highTime += dt;
-          if (f.highTime > maxT) maxT = f.highTime;
-        } else if (sp >= KEEP_SPEED) {
-          f.highTime = 0; // 真正剧烈运动才清零
-        }
-        // 其余情况（轻微抖动）计时保持不清零
-      } else {
-        f.highTime = 0;
-      }
+      if (f.fresh > 0) { f.fresh -= dt; continue; } // 刚下放的球有短暂保护期，避免下落瞬间误触发
+      if (f.y - f.r < DANGER_Y) { overflow = true; break; }
     }
-    if (maxT >= DANGER_TIME) { gameOverNow(); return; }
-    if (maxT > 0) dangerLeft = Math.max(0, DANGER_TIME - maxT);
+    if (overflow) {
+      if (dangerLeft === null) dangerLeft = DANGER_TIME;
+      dangerLeft -= dt;
+      if (dangerLeft <= 0) { gameOverNow(); return; }
+    } else {
+      dangerLeft = null;
+    }
   }
 
   function step(dt) {
@@ -660,7 +653,8 @@
       var col = (lv - 1) % 3, row = Math.floor((lv - 1) / 3);
       var cx = x0 + col * (cell + gap) + cell / 2;
       var cy = y0 + row * (cell + gap) + cell / 2;
-      var unlockedFlag = myProfile && myProfile.unlocked && myProfile.unlocked[lv];
+      // 等级 1 是基础杨波（投放即有），永远显示图像；其余等级看合成记录
+      var unlockedFlag = (lv === 1) || (myProfile && myProfile.unlocked && myProfile.unlocked[lv]);
       if (unlockedFlag) {
         drawFruitAt(galleryCtx, cx, cy, 18, lv);
       } else {
