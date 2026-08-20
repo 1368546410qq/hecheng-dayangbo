@@ -24,7 +24,7 @@
     align-items: center;
     gap: 12px;
     width: 100%;
-    max-width: 640px;
+    max-width: 720px;
   }
   .header {
     display: flex;
@@ -63,7 +63,7 @@
     overflow: hidden;
     box-shadow: 0 16px 48px rgba(0,0,0,.55);
     width: 100%;
-    max-width: 480px;
+    max-width: 560px;
     background: #000;
   }
   canvas#game { display: block; width: 100%; height: auto; touch-action: none; }
@@ -145,7 +145,7 @@
           <canvas id="nextCanvas" width="140" height="140"></canvas>
         </div>
         <button id="restart2">重新开始</button>
-        <div class="hint">点击 / 触摸投放水果<br>相同水果会合成更大的水果<br>1 → 9 从小到大</div>
+        <div class="hint">点击 / 触摸投放水果<br>相同水果会合成更大的水果<br>1 → 15 从小到大</div>
       </div>
     </div>
   </div>
@@ -155,33 +155,32 @@
   "use strict";
 
   // ---------- 基础常量 ----------
-  var W = 480, H = 720;              // 逻辑画布尺寸
-  var DANGER_Y = 140;                // 游戏结束警戒线
+  var W = 560, H = 820;              // 逻辑画布尺寸（更大的框）
+  var DANGER_Y = 150;                // 游戏结束警戒线
   var G = 2000;                      // 重力加速度 px/s^2
-  var E = 0.22;                      // 弹性系数
+  var E = 0.12;                      // 弹性系数（更低，减少弹跳）
   var STEP = 1 / 120;                // 物理步长
+  var SOLVER_ITERS = 14;             // 碰撞求解迭代次数
+  var RELAX = 0.5;                   // 位置修正松弛系数
+  var STABLE_SPEED = 40;             // 判定「稳定」的速度阈值 px/s
+  var SLEEP_SPEED = 18;              // 低于此速度开始计时入睡
+  var SLEEP_TIME = 0.28;             // 持续低速多久后入睡（秒）
+  var DANGER_TIME = 3.0;             // 稳定后越过警戒线 3 秒判负
 
-  // 等级 1..9 的半径（从小到大）
-  var RADII = [0, 24, 33, 42, 52, 62, 73, 84, 96, 110];
-  // 等级 1..9 的主题色
+  // 等级 1..15 的半径（从小到大）
+  var RADII = [0, 24, 33, 42, 52, 62, 73, 84, 96, 110, 123, 136, 149, 162, 175, 188];
+  // 等级 1..15 的主题色
   var COLORS = [null,
     '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e',
-    '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7'];
+    '#10b981', '#14b8a6', '#0ea5e9', '#3b82f6', '#6366f1',
+    '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e'];
   // 合成得到的分数（第 L 级 = 2^(L-1)）
-  var POINTS = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256];
+  var POINTS = [0];
+  for (var _l = 1; _l <= 15; _l++) POINTS.push(Math.pow(2, _l - 1));
 
-  // 素材路径（3 是 jpg，其余 png；图片缺失时自动用占位图）
-  var IMG_PATHS = {
-    1: '素材/1.png',
-    2: '素材/2.png',
-    3: '素材/3.jpg',
-    4: '素材/4.png',
-    5: '素材/5.png',
-    6: '素材/6.png',
-    7: '素材/7.png',
-    8: '素材/8.png',
-    9: '素材/9.png'
-  };
+  // 素材路径（1..15 均为 png；图片缺失时自动用占位图）
+  var IMG_PATHS = {};
+  for (var _lv = 1; _lv <= 15; _lv++) IMG_PATHS[_lv] = '素材/' + _lv + '.png';
 
   // ---------- DOM ----------
   var canvas = document.getElementById('game');
@@ -199,16 +198,18 @@
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   // ---------- 状态 ----------
-  var fruits = [];      // {level, r, x, y, vx, vy, highTime}
+  var fruits = [];      // {level, r, x, y, vx, vy, sleeping, stillTime}
   var particles = [];   // 合成粒子
   var texts = [];       // 合成飘分
   var imgs = {};        // level -> Image (或 null 表示占位图)
   var score = 0;
   var best = 0;
-  var nextLevel = 1;
+  var currentLevel = 1; // 当前即将下放的水果等级
+  var nextLevel = 1;    // 下下个水果等级（侧栏「下一个」显示）
   var aimX = W / 2;
   var gameOver = false;
   var lastDropReal = 0;
+  var dangerTime = 0;   // 稳定且越过警戒线的累计时长
 
   try { best = parseInt(localStorage.getItem('shalong_yangbo_best') || '0', 10) || 0; } catch (e) {}
   bestEl.textContent = best;
@@ -217,15 +218,17 @@
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
   function randomLevel() {
     var r = Math.random();
-    if (r < 0.30) return 1;
-    if (r < 0.55) return 2;
-    if (r < 0.75) return 3;
-    if (r < 0.90) return 4;
-    return 5;
+    if (r < 0.28) return 1;
+    if (r < 0.52) return 2;
+    if (r < 0.72) return 3;
+    if (r < 0.86) return 4;
+    if (r < 0.95) return 5;
+    if (r < 0.985) return 6;
+    return 7;
   }
 
   // ---------- 图片加载 ----------
-  for (var lv = 1; lv <= 9; lv++) {
+  for (var lv = 1; lv <= 15; lv++) {
     (function (level) {
       var img = new Image();
       img.onload = function () { imgs[level] = img; };
@@ -288,10 +291,13 @@
     if (now - lastDropReal < 140) return; // 防止连点堆叠
     lastDropReal = now;
 
-    var level = nextLevel;
+    var level = currentLevel;
     var r = RADII[level];
     var x = clamp(aimX, r, W - r);
-    fruits.push({ level: level, r: r, x: x, y: r + 2, vx: 0, vy: 0, highTime: 0 });
+    fruits.push({ level: level, r: r, x: x, y: r + 2, vx: 0, vy: 0, sleeping: false, stillTime: 0 });
+    wakeNear(x, r + 2, r * 4);
+    dangerTime = 0; // 新投放重新开始计时
+    currentLevel = nextLevel;
     nextLevel = randomLevel();
     drawNext();
   }
@@ -302,6 +308,8 @@
     texts = [];
     score = 0;
     gameOver = false;
+    dangerTime = 0;
+    currentLevel = randomLevel();
     nextLevel = randomLevel();
     aimX = W / 2;
     scoreEl.textContent = '0';
@@ -324,8 +332,9 @@
   function integrate(dt) {
     for (var i = 0; i < fruits.length; i++) {
       var f = fruits[i];
+      if (f.sleeping) continue;
       f.vy += G * dt;
-      f.vx *= Math.max(0, 1 - 0.35 * dt); // 空气阻力
+      f.vx *= Math.max(0, 1 - 0.5 * dt); // 空气阻力
       f.x += f.vx * dt;
       f.y += f.vy * dt;
 
@@ -336,7 +345,7 @@
       if (f.y > H - f.r) {
         f.y = H - f.r;
         if (f.vy > 0) f.vy = -f.vy * E;
-        f.vx *= Math.max(0, 1 - 3 * dt); // 地面摩擦
+        f.vx *= Math.max(0, 1 - 6 * dt); // 地面摩擦
       }
       // 天花板
       if (f.y < f.r) { f.y = f.r; if (f.vy < 0) f.vy = -f.vy * E; }
@@ -347,7 +356,7 @@
     for (var i = 0; i < fruits.length; i++) {
       for (var j = i + 1; j < fruits.length; j++) {
         var a = fruits[i], b = fruits[j];
-        if (a.level !== b.level || a.level >= 9) continue;
+        if (a.level !== b.level || a.level >= 15) continue;
         var dx = b.x - a.x, dy = b.y - a.y;
         var min = a.r + b.r;
         if (dx * dx + dy * dy < min * min) {
@@ -355,13 +364,14 @@
           var level = a.level + 1;
           var r = RADII[level];
           var x = clamp((a.x + b.x) / 2, r, W - r);
-          var y = Math.min((a.y + b.y) / 2, H - r);
+          var y = clamp((a.y + b.y) / 2, r, H - r);
           fruits.splice(Math.max(i, j), 1);
           fruits.splice(Math.min(i, j), 1);
           fruits.push({
             level: level, r: r, x: x, y: y,
-            vx: (a.vx + b.vx) / 2, vy: (a.vy + b.vy) / 2, highTime: 0
+            vx: (a.vx + b.vx) / 2, vy: (a.vy + b.vy) / 2, sleeping: false, stillTime: 0
           });
+          wakeNear(x, y, r * 4);
           score += POINTS[level];
           scoreEl.textContent = score;
           spawnMergeFx(x, y, level);
@@ -378,16 +388,22 @@
     var dist = Math.sqrt(dx * dx + dy * dy);
     var min = a.r + b.r;
     if (dist >= min) return;
+    // 双方都在睡且已接触：忽略，避免无谓抖动
+    if (a.sleeping && b.sleeping) return;
+    // 发生碰撞即唤醒双方
+    a.sleeping = false; a.stillTime = 0;
+    b.sleeping = false; b.stillTime = 0;
     if (dist < 0.0001) { dx = 0; dy = 0.01; dist = 0.01; }
     var nx = dx / dist, ny = dy / dist;
     var overlap = min - dist;
     var invA = 1 / (a.r * a.r), invB = 1 / (b.r * b.r);
     var total = invA + invB;
-    // 位置修正
-    a.x -= nx * overlap * (invA / total);
-    a.y -= ny * overlap * (invA / total);
-    b.x += nx * overlap * (invB / total);
-    b.y += ny * overlap * (invB / total);
+    // 位置修正（带松弛，避免过冲震荡）
+    var corr = overlap * RELAX;
+    a.x -= nx * corr * (invA / total);
+    a.y -= ny * corr * (invA / total);
+    b.x += nx * corr * (invB / total);
+    b.y += ny * corr * (invB / total);
     // 冲量
     var rvx = b.vx - a.vx, rvy = b.vy - a.vy;
     var vn = rvx * nx + rvy * ny;
@@ -406,25 +422,68 @@
     }
   }
 
-  function step(dt) {
-    integrate(dt);
-    for (var it = 0; it < 5; it++) {
-      var guard = 0;
-      while (tryMerge() && guard++ < 40) {}
-      resolveAll();
-    }
-
-    // 警戒线检测：越过警戒线且速度很慢并持续一段时间 → 游戏结束
+  function wakeNear(x, y, radius) {
+    var rr = radius * radius;
     for (var i = 0; i < fruits.length; i++) {
       var f = fruits[i];
-      var speed = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
-      if (f.y - f.r < DANGER_Y && speed < 60) {
-        f.highTime += dt;
-        if (f.highTime > 1.1) { gameOverNow(); break; }
+      var dx = f.x - x, dy = f.y - y;
+      if (dx * dx + dy * dy < rr) { f.sleeping = false; f.stillTime = 0; }
+    }
+  }
+
+  function enforceBounds() {
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      if (f.x < f.r) { f.x = f.r; if (f.vx < 0) f.vx = 0; }
+      else if (f.x > W - f.r) { f.x = W - f.r; if (f.vx > 0) f.vx = 0; }
+      if (f.y < f.r) { f.y = f.r; if (f.vy < 0) f.vy = 0; }
+      if (f.y > H - f.r) { f.y = H - f.r; if (f.vy > 0) f.vy = 0; }
+    }
+  }
+
+  function applySleep(dt) {
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      var sp = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
+      if (sp < SLEEP_SPEED) {
+        f.stillTime += dt;
+        if (f.stillTime >= SLEEP_TIME) {
+          f.sleeping = true;
+          f.vx = 0; f.vy = 0;
+        }
       } else {
-        f.highTime = 0;
+        f.stillTime = 0;
+        f.sleeping = false;
       }
     }
+  }
+
+  function updateDanger(dt) {
+    if (fruits.length === 0) { dangerTime = 0; return; }
+    var overflow = false;
+    var stable = true;
+    for (var i = 0; i < fruits.length; i++) {
+      var f = fruits[i];
+      var sp = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
+      if (sp >= STABLE_SPEED) stable = false;
+      if (f.y - f.r < DANGER_Y) overflow = true;
+    }
+    if (stable && overflow) {
+      dangerTime += dt;
+      if (dangerTime >= DANGER_TIME) gameOverNow();
+    } else {
+      dangerTime = 0;
+    }
+  }
+
+  function step(dt) {
+    integrate(dt);
+    var guard = 0;
+    while (tryMerge() && guard++ < 80) {}
+    for (var it = 0; it < SOLVER_ITERS; it++) resolveAll();
+    enforceBounds();
+    applySleep(dt);
+    updateDanger(dt);
   }
 
   // ---------- 渲染 ----------
@@ -536,7 +595,7 @@
 
     // 瞄准辅助与预览
     if (!gameOver) {
-      var r = RADII[nextLevel];
+      var r = RADII[currentLevel];
       var px = clamp(aimX, r, W - r);
       ctx.setLineDash([4, 6]);
       ctx.lineWidth = 2;
@@ -546,7 +605,7 @@
       ctx.lineTo(px, H - 10);
       ctx.stroke();
       ctx.setLineDash([]);
-      drawFruitAt(ctx, px, r + 2, r, nextLevel);
+      drawFruitAt(ctx, px, r + 2, r, currentLevel);
     }
   }
 
@@ -603,6 +662,7 @@
   document.getElementById('restart2').addEventListener('click', restart);
 
   // ---------- 启动 ----------
+  currentLevel = randomLevel();
   nextLevel = randomLevel();
   drawNext();
   requestAnimationFrame(loop);
